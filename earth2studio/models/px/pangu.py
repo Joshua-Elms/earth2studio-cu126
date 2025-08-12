@@ -624,9 +624,6 @@ class Pangu6x(PanguBase):
     ) -> Generator[tuple[torch.Tensor, CoordSystem], None, None]:
         coords = coords.copy()
 
-        # Load other sessions (note .to() does not impact these)
-        ort24 = create_ort_session(self.ort24, self.device)
-
         self.output_coords(coords)
 
         yield x, coords
