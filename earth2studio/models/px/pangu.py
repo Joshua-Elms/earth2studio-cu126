@@ -542,7 +542,104 @@ class Pangu6(PanguBase):
             )
             x, coords = self.rear_hook(x, coords)
             yield x, coords.copy()
+            
+            
+@check_optional_dependencies()
+class Pangu6x(PanguBase):
+    """Pangu Weather 6 hour model. This model is purely a 6-hour model, with no
+    24-hour timesteps. It is a research tool. Pangu Weather operates on 0.25
+    degree lat-lon grid (south-pole including) equirectangular grid with 69 atmospheric/surface variables.
 
+    Note
+    ----
+    This model uses the ONNX checkpoints from the original publication.
+    For additional information see the following resources:
+
+    - https://doi.org/10.1038/s41586-023-06185-3
+    - https://github.com/198808xc/Pangu-Weather
+
+    Note
+    ----
+    To avoid ONNX init session overhead of this model we recommend setting the default
+    Pytorch device to the correct target prior to model construction.
+
+    Warning
+    -------
+    We encourage users to familiarize themselves with the license restrictions of this
+    model's checkpoints.
+
+    Parameters
+    ----------
+    ort_6hr : str
+        Path to Pangu 6 hour onnx file
+    """
+
+    def __init__(
+        self,
+        ort_6hr: str,
+    ):
+        super().__init__()
+        # Only require 6 hour to load session on construction
+        self.ort: ort.InferenceSession = create_ort_session(ort_6hr, self.device)
+        self._output_coords["lead_time"] = np.array([np.timedelta64(6, "h")])
+
+    @classmethod
+    @check_optional_dependencies()
+    def load_model(
+        cls,
+        package: Package,
+    ) -> PrognosticModel:
+        """Load prognostic from package"""
+        # Ghetto at the moment because NGC files are zipped. This will download zip and
+        # unpack them then give the cached folder location from which we can then
+        # access the needed files.
+        onnx_file_6 = package.resolve("pangu_weather_6.onnx")
+        return cls(onnx_file_6)
+
+    @batch_func()
+    def __call__(
+        self,
+        x: torch.Tensor,
+        coords: CoordSystem,
+    ) -> tuple[torch.Tensor, CoordSystem]:
+        """Runs 6 hour prognostic model 1 step.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor
+        coords : CoordSystem
+            Input coordinate system
+
+        Returns
+        -------
+        tuple[torch.Tensor, CoordSystem]
+            Output tensor and coordinate system 6 hours in the future
+        """
+        return self._forward(x, coords, self.ort)
+
+    @batch_func()
+    def _default_generator(
+        self, x: torch.Tensor, coords: CoordSystem
+    ) -> Generator[tuple[torch.Tensor, CoordSystem], None, None]:
+        coords = coords.copy()
+
+        # Load other sessions (note .to() does not impact these)
+        ort24 = create_ort_session(self.ort24, self.device)
+
+        self.output_coords(coords)
+
+        yield x, coords
+
+        while True:
+            x, coords = self.front_hook(x, coords)
+            x, coords = self._forward(
+                x,
+                coords,
+                self.ort,
+            )
+            x, coords = self.rear_hook(x, coords)
+            yield x, coords.copy()
 
 @check_optional_dependencies()
 class Pangu3(PanguBase):
@@ -682,3 +779,4 @@ class Pangu3(PanguBase):
             )
             x, coords = self.rear_hook(x, coords)
             yield x, coords.copy()
+
