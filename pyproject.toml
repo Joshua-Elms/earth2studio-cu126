@@ -219,6 +219,7 @@ torch = [
   { index = "pytorch-cpu", marker = "sys_platform != 'linux'" },
   { index = "pytorch-cu126", marker = "sys_platform == 'linux'" },
 ]
+earth2studio = { workspace = true }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
