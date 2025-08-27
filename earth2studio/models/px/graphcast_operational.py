@@ -392,7 +392,18 @@ class GraphCastOperational(torch.nn.Module, AutoModelMixin, PrognosticMixin):
             forcings = forcings.compute()
 
             # Make predictions for the chunk.
-            rng, this_rng = split_rng_fn(rng)
+            # rng, this_rng = split_rng_fn(rng)
+            # addition: fix rng
+            this_rng = jax.numpy.array([1, 2], dtype="uint32")
+            # read out initial "current_inputs", write them into this one for all forcing fields
+            from pathlib import Path
+            if not Path("static_current_inputs.nc").exists():
+                current_inputs.to_netcdf("static_current_inputs.nc")
+            static_current_inputs = xr.open_dataset("static_current_inputs.nc")
+            overwrite_vars = ["year_progress_cos", "year_progress_sin", "day_progress_sin", "day_progress_cos", "toa_incident_solar_radiation", "land_sea_mask", "geopotential_at_surface"]
+            for var in overwrite_vars:
+                current_inputs[var] = static_current_inputs[var]
+            breakpoint()
             predictions = predictor_fn(
                 rng=this_rng,
                 inputs=current_inputs,
@@ -414,9 +425,19 @@ class GraphCastOperational(torch.nn.Module, AutoModelMixin, PrognosticMixin):
             yield predictions
             del predictions
 
+            # if const_sza, hold time input to self.model constant
+            if hasattr(self, "const_sza"):
+                const_sza = self.const_sza
+            else:
+                const_sza = False
+            if const_sza: 
+                dt = 0
+            else:
+                dt = 6
+
             # Update batch time 6 hours and rename time to datetime
             batch = batch.assign_coords(
-                datetime=batch.coords["datetime"] + np.timedelta64(6, "h")
+                datetime=batch.coords["datetime"] + np.timedelta64(dt, "h")
             )
 
             # Pop forcings from batch if needed
@@ -464,11 +485,16 @@ class GraphCastOperational(torch.nn.Module, AutoModelMixin, PrognosticMixin):
 
             # Forward is identity operator
             coords = self.output_coords(coords)
+            
+            # Front hook
+            breakpoint()
+            x, coords = self.front_hook(x, coords)
 
             # Get next prediction
             x = self.iterator_result_to_tensor(next(self.iterator))
 
             # Rear hook
+            breakpoint()
             x, coords = self.rear_hook(x, coords)
 
             # Convert to device

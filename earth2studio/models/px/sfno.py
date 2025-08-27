@@ -336,6 +336,16 @@ class SFNO(torch.nn.Module, AutoModelMixin, PrognosticMixin):
     ) -> tuple[torch.Tensor, CoordSystem]:
         output_coords = self.output_coords(coords)
         x = x.squeeze(2)
+        # if const_sza, hold time input to model constant
+        if hasattr(self, "const_sza"):
+            const_sza = self.const_sza
+        else:
+            const_sza = False
+        if const_sza: 
+            t0 = [
+                    datetime.fromisoformat(dt.isoformat() + "+00:00")
+                    for dt in timearray_to_datetime(coords["time"][0] + np.array([0], dtype="timedelta64[ns]"))
+                ]
         for j, _ in enumerate(coords["batch"]):
             for i, t in enumerate(coords["time"]):
                 # https://github.com/NVIDIA/modulus-makani/blob/933b17d5a1ebfdb0e16e2ebbd7ee78cfccfda9e1/makani/third_party/climt/zenith_angle.py#L197
@@ -344,7 +354,7 @@ class SFNO(torch.nn.Module, AutoModelMixin, PrognosticMixin):
                     datetime.fromisoformat(dt.isoformat() + "+00:00")
                     for dt in timearray_to_datetime(t + coords["lead_time"])
                 ]
-                x[j, i : i + 1] = self.model(x[j, i : i + 1], t, normalized_data=False)
+                x[j, i : i + 1] = self.model(x[j, i : i + 1], t0 if const_sza else t, normalized_data=False)
         x = x.unsqueeze(2)
         return x, output_coords
 
