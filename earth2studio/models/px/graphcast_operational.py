@@ -397,23 +397,55 @@ class GraphCastOperational(torch.nn.Module, AutoModelMixin, PrognosticMixin):
             this_rng = jax.numpy.array([1, 2], dtype="uint32")
             # read out initial "current_inputs", write them into this one for all forcing fields
             from pathlib import Path
+
             if not Path("static_current_inputs.nc").exists():
                 current_inputs.to_netcdf("static_current_inputs.nc")
             static_current_inputs = xr.open_dataset("static_current_inputs.nc")
-            overwrite_vars = ["year_progress_cos", "year_progress_sin", "day_progress_sin", "day_progress_cos", "toa_incident_solar_radiation", "land_sea_mask", "geopotential_at_surface"]
+            overwrite_vars = [
+                "year_progress_cos",
+                "year_progress_sin",
+                "day_progress_sin",
+                "day_progress_cos",
+                "toa_incident_solar_radiation",
+                "land_sea_mask",
+                "geopotential_at_surface",
+            ]
             for var in overwrite_vars:
                 current_inputs[var] = static_current_inputs[var]
-            breakpoint()
+
+            # TODO: add front hook here
+            # only incomplete because current_inputs is 
+            # a dataset and needs to be a tensor
+            # for front_hook to work, and the dims 
+            # of current_inputs are complicated 
+            # (e.g. lead_time on iter=0 changes to time after)
+            # breakpoint() # check current_inputs["2m_temperature"][0, :, 100, 100]
+            for name, dat in (("current_inputs", current_inputs), ("forcings", forcings)):
+                fpath = Path(f"stuff/{index}_{name}.nc")
+                if fpath.exists():
+                    fpath.unlink()
+                dat.to_netcdf(fpath)
             predictions = predictor_fn(
                 rng=this_rng,
                 inputs=current_inputs,
                 targets_template=targets_template,
                 forcings=forcings,
             )
+
+            # Rear hook
+            print(predictions["2m_temperature"][0, :, 100, 100])
+            xpred = self.iterator_result_to_tensor(predictions)
+            # breakpoint() # check predictions["2m_temperature"][0, :, 100, 100], xpred[0, :, 0, 100, 100]
+            xpred, self._current_coords_for_iterator = self.rear_hook(
+                xpred, self._current_coords_for_iterator
+            )
+            predictions = self.from_tensor_to_dataset(
+                xpred, self._current_coords_for_iterator
+            )
             next_frame = xr.merge([predictions, forcings])
 
             next_inputs = rollout._get_next_inputs(current_inputs, next_frame)
-
+            # breakpoint() # check current_inputs["2m_temperature"][0, :, 100, 100], next_inputs["2m_temperature"][0, :, 100, 100]
             # Shift timedelta coordinates, so we don't recompile at every iteration.
             next_inputs = next_inputs.assign_coords(time=current_inputs.coords["time"])
             current_inputs = next_inputs
@@ -422,6 +454,7 @@ class GraphCastOperational(torch.nn.Module, AutoModelMixin, PrognosticMixin):
             predictions = predictions.assign_coords(
                 time=targets_template.coords["time"] + index * np.timedelta64(6, "h")
             )
+
             yield predictions
             del predictions
 
@@ -430,7 +463,7 @@ class GraphCastOperational(torch.nn.Module, AutoModelMixin, PrognosticMixin):
                 const_sza = self.const_sza
             else:
                 const_sza = False
-            if const_sza: 
+            if const_sza:
                 dt = 0
             else:
                 dt = 6
@@ -485,17 +518,20 @@ class GraphCastOperational(torch.nn.Module, AutoModelMixin, PrognosticMixin):
 
             # Forward is identity operator
             coords = self.output_coords(coords)
-            
+
             # Front hook
-            breakpoint()
             x, coords = self.front_hook(x, coords)
+
+            # This isn't particularly good practice, but it's lightweight.
+            # We need 'coords' inside _chunked_prediction_generator to
+            # call the rear_hook, and this works for now.
+            self._current_coords_for_iterator = coords
 
             # Get next prediction
             x = self.iterator_result_to_tensor(next(self.iterator))
 
-            # Rear hook
-            breakpoint()
-            x, coords = self.rear_hook(x, coords)
+            # Update coords from iterator
+            coords = self._current_coords_for_iterator
 
             # Convert to device
             x = x.to(device)
@@ -650,6 +686,66 @@ class GraphCastOperational(torch.nn.Module, AutoModelMixin, PrognosticMixin):
             out = out.to(device)
 
             return out, output_coords
+
+    def from_tensor_to_dataset(
+        self, x: torch.Tensor, coords: CoordSystem
+    ) -> xr.Dataset:
+        """Convert Earth2Studio-formatted tensor+coords obj into internal GraphCast-formatted Dataset"""
+        SL_VAR_INDICES = [0, 1, 2, 3, 4]
+        ZERO_VAR_INDICES = [83, 84]
+        VARNAMES = [
+            "2m_temperature",
+            "mean_sea_level_pressure",
+            "10m_u_component_of_wind",
+            "10m_v_component_of_wind",
+            "total_precipitation_6hr",
+        ] + [
+            var
+            for var in [
+                "temperature",
+                "geopotential",
+                "u_component_of_wind",
+                "v_component_of_wind",
+                "vertical_velocity",
+                "specific_humidity",
+            ]
+            for level in ATMOS_LEVELS
+        ] + [
+            "geopotential_at_surface",
+            "land_sea_mask"
+        ]
+        keep_coords = ["batch", "time", "level", "lat", "lon"]
+        use_coords = coords.copy()
+        use_coords["time"] = [np.timedelta64(6, "h")]
+        ds = xr.Dataset(
+            coords={k: use_coords[k] for k in keep_coords if k in use_coords.keys()}
+        )
+        ds = ds.assign_coords(level=ATMOS_LEVELS)
+
+        for i, var in enumerate(VARIABLES):
+            if i in SL_VAR_INDICES:
+                ds[VARNAMES[i]] = (
+                    ["batch", "time", "lat", "lon"],
+                    x[..., -1, i, :, :].cpu().numpy(),
+                )
+            elif i in ZERO_VAR_INDICES:
+                ds[VARNAMES[i]] = (
+                    ["batch", "time", "lat", "lon"],
+                    0 * x[..., -1, 0, :, :].cpu().numpy(),
+                )
+            else:  # rest of vars
+                # extract level, assuming it's all chars after 0th
+                lev = int(var[1:])
+                varname = VARNAMES[i]
+                # if var doesn't have da in ds, make one
+                if varname not in ds.data_vars:
+                    ds[varname] = xr.DataArray(
+                        0,
+                        coords={k: ds.coords[k] for k in keep_coords},
+                        dims=keep_coords,
+                    )
+                ds[varname].loc[dict(level=[lev])] = x[..., -1, i, :, :].cpu().numpy()
+        return ds
 
     def from_dataarray_to_dataset(
         self, data: xr.DataArray, lead_time: int = 6, hour_steps: int = 6
