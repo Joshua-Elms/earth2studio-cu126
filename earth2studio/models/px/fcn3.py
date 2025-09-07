@@ -286,7 +286,16 @@ class FCN3(torch.nn.Module, AutoModelMixin, PrognosticMixin):
     ) -> tuple[torch.Tensor, CoordSystem]:
         output_coords = self.output_coords(coords)
         x = x.squeeze(2)
-
+        # if const_sza, hold time input to model constant
+        if hasattr(self, "const_sza"):
+            const_sza = self.const_sza
+        else:
+            const_sza = False
+        if const_sza: 
+            t0 = [
+                    datetime.fromisoformat(dt.isoformat() + "+00:00")
+                    for dt in timearray_to_datetime(coords["time"][0] + np.array([0], dtype="timedelta64[ns]"))
+                ]
         # For normalization, we will use both z-normalization and minmax normalization
         # The center/scale and min/max should be constructed to only apply to the correct variables, respectively.
         # See `load_model` for more details.
@@ -305,7 +314,7 @@ class FCN3(torch.nn.Module, AutoModelMixin, PrognosticMixin):
                     ),
                 ):
                     x[j, i : i + 1] = self.model(
-                        x[j, i : i + 1], t, normalized_data=False, replace_state=True
+                        x[j, i : i + 1], t0 if const_sza else t, normalized_data=False, replace_state=True
                     )
         x = x.unsqueeze(2)
         return x, output_coords
