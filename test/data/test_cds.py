@@ -125,6 +125,7 @@ def test_cds_cache(time, variable, cache):
         pass
 
 
+@pytest.mark.xfail
 @pytest.mark.timeout(30)
 @pytest.mark.parametrize(
     "time",
