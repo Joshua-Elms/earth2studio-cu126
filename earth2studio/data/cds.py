@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 from time import sleep
 from typing import Any
 
+import gcsfs
 import numpy as np
 import xarray as xr
 from cfgrib.xarray_to_grib import to_grib
@@ -286,15 +287,59 @@ class CDS:
         if isinstance(level, str):
             level = [level]
 
-        sha = hashlib.sha256(
-            f"{dataset_name}_{variable}_{'_'.join(level)}_{time}".encode()
-        )
+        if dataset_name == "google_cloud_dataset":  # invariant, don't use time in fname
+            sha = hashlib.sha256(
+                f"{dataset_name}_{variable}_{'_'.join(level)}".encode()
+            )
+        else:
+            sha = hashlib.sha256(
+                f"{dataset_name}_{variable}_{'_'.join(level)}_{time}".encode()
+            )
         filename = sha.hexdigest()
 
         cache_path = os.path.join(self.cache, filename)
 
         if not pathlib.Path(cache_path).is_file():
-            if variable != "total_precipitation_06":
+            if variable == "total_precipitation_06":
+                # needs special treatment, see https://github.com/NVIDIA/earth2studio/issues/456
+                self._download_cds_tp06_grib_cached(time, cache_path)
+            elif dataset_name == "google_cloud_dataset":
+                # download from google because only version on CDS API is at 0.1 deg resolution, would need interp
+                # see https://confluence.ecmwf.int/display/CKB/ERA5-Land%3A+data+documentation#heading-Table1surfaceparametersinvariantsintime
+                gcs = gcsfs.GCSFileSystem(cache_timeout=-1)
+                with gcs.open(
+                    "dm_graphcast/graphcast/dataset/source-era5_date-2022-01-01_res-0.25_levels-13_steps-01.nc",
+                    "rb",
+                ) as f:
+                    da = xr.open_dataset(f)[variable].sortby("lat", ascending=False)
+
+                # now we download a template grib file from the CDS to write the actual field into
+                template_da_path = self._download_cds_grib_cached(
+                    datetime.fromisoformat("2020-01-01T00:00:00"),
+                    "reanalysis-era5-single-levels",
+                    "total_precipitation",
+                    level=[""],
+                )
+                template_da = xr.open_dataarray(
+                    template_da_path, engine="cfgrib", backend_kwargs={"indexpath": ""}
+                )
+                template_da.values = da.values
+
+                # only datasets can be written to grib
+                actual_ds = xr.Dataset({variable: template_da})
+
+                # write to cache
+                to_grib(actual_ds, cache_path, no_warn=True, grib_keys={"edition": 1})
+
+                if os.path.exists(cache_path):
+                    logger.info(f"Successfully downloaded {variable} from google cloud")
+                else:
+                    raise RuntimeError(
+                        f"Failed to download {variable} from google cloud"
+                    )
+
+            else:
+                # most of the requests fall in here
                 # Assemble request
                 rbody = {
                     "variable": variable,
@@ -333,9 +378,6 @@ class CDS:
                         sleep(2.0)
                 # Download when ready
                 r.download(cache_path)
-            else:  # variable == "total_precipitation_06"
-                # needs special treatment, see https://github.com/NVIDIA/earth2studio/issues/456
-                self._download_cds_tp06_grib_cached(time, cache_path)
 
         return cache_path
 
@@ -375,7 +417,7 @@ class CDS:
         tp06_ds = xr.Dataset({"tp06": tp06_data})
 
         # write to cache
-        to_grib(tp06_ds, cache_path, no_warn=True, grib_keys={"edition": 2})
+        to_grib(tp06_ds, cache_path, no_warn=True, grib_keys={"edition": 1})
 
     @property
     def cache(self) -> str:
