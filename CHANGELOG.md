@@ -15,10 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added CBottle Video prognostic model
 - Exposed backend arguments of netcdf/zarr to datasource_to_file signature
 - Added vertical wind speed support in GFS
+- Added ModelOutputDatasetSource to use written model output to start a new model run
 
 ### Changed
 
 - Updated CBottle data source to mixture of experts models
+- Fixed duplicate geo-potential at surface ids in AIFS, IFS data source and orography
+  source, orography is denoted by lower case `z`
 
 ### Deprecated
 
