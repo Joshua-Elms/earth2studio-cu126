@@ -24,7 +24,7 @@ from earth2studio.models.px.dlwp import DLWP
 from earth2studio.models.px.fcn import FCN
 from earth2studio.models.px.fcn3 import FCN3
 from earth2studio.models.px.fengwu import FengWu
-from earth2studio.models.px.fuxi import FuXi, FuXiShort, FuxiMedium, FuxiLong
+from earth2studio.models.px.fuxi import FuXi, FuXiShort, FuXiMedium, FuXiLong
 from earth2studio.models.px.graphcast_operational import GraphCastOperational
 from earth2studio.models.px.graphcast_small import GraphCastSmall
 from earth2studio.models.px.interpmodafno import InterpModAFNO
