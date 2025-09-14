@@ -388,6 +388,9 @@ class FuXi(torch.nn.Module, AutoModelMixin, PrognosticMixin):
         # Convert tp06 back to m
         output[..., tp06_index, :, :] = output[..., tp06_index, :, :] / 1000
 
+        # ah ah ah, missed converting the x version back to m...
+        x[..., tp06_index, :, :] = x[..., tp06_index, :, :] / 1000
+
         return output, output_coords
 
     @batch_func()
@@ -457,14 +460,19 @@ class FuXi(torch.nn.Module, AutoModelMixin, PrognosticMixin):
 
             # Yield current output
             output = out[:, :, 1:]
-            yield output, out_coords.copy()
+            new_out_coords = out_coords.copy()
+            new_out_coords["lead_time"] = (
+                coords["lead_time"] + np.timedelta64(6, "h") * step
+            )
+            yield output, new_out_coords
 
             # Use output as next input ([t-1, t] -> [t, t+1])
-            x = out
-            coords["lead_time"] = (
-                coords["lead_time"]
-                + self.output_coords(self.input_coords())["lead_time"]
-            )
+            x[:, :, 0] = x[:, :, 1]
+            x[:, :, 1] = out[:, :, 1]
+            # coords["lead_time"] = (
+            #     coords["lead_time"]
+            #     + self.output_coords(self.input_coords())["lead_time"]
+            # )
 
     def create_iterator(
         self, x: torch.Tensor, coords: CoordSystem
@@ -487,50 +495,6 @@ class FuXi(torch.nn.Module, AutoModelMixin, PrognosticMixin):
         """
         yield from self._default_generator(x, coords)
 
-
-class FuXiShort(torch.nn.Module, AutoModelMixin, PrognosticMixin):
-    """FuXi weather model that only uses the short model."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    @batch_func()
-    def _default_generator(
-        self, x: torch.Tensor, coords: CoordSystem
-    ) -> Generator[tuple[torch.Tensor, CoordSystem], None, None]:
-        coords = coords.copy()
-
-        self.output_coords(coords)
-
-        coords_out = coords.copy()
-        coords_out["lead_time"] = coords["lead_time"][1:]
-        yield x[:, :, 1:], coords_out
-
-        step = 0
-        self.ort = create_ort_session(self.ort_short_path, self.device)
-        while True:
-
-            step += 1
-
-            # Front hook
-            x, coords = self.front_hook(x, coords)
-
-            # Forward is identity operator
-            out, out_coords = self._forward(x, coords, self.ort)
-
-            # Rear hook
-            out, out_coords = self.rear_hook(out, out_coords)
-
-            # Yield current output
-            output = out[:, :, 1:]
-            yield output, out_coords.copy()
-
-            # Use output as next input ([t-1, t] -> [t, t+1])
-            x = out
-            coords["lead_time"] = (
-                coords["lead_time"]
-                + self.output_coords(self.input_coords())["lead_time"]
-            )
 
 class FuXiShort(FuXi):
     """FuXi weather model that only uses the short model."""
@@ -570,26 +534,34 @@ class FuXiShort(FuXi):
 
             # Yield current output
             output = out[:, :, 1:]
-            yield output, out_coords.copy()
+            new_out_coords = out_coords.copy()
+            new_out_coords["lead_time"] = (
+                coords["lead_time"] + np.timedelta64(6, "h") * step
+            )
+            yield output, new_out_coords
 
             # Use output as next input ([t-1, t] -> [t, t+1])
-            x = out
-            coords["lead_time"] = (
-                coords["lead_time"]
-                + self.output_coords(self.input_coords())["lead_time"]
-            )
-            
+            x[:, :, 0] = x[:, :, 1]
+            x[:, :, 1] = out[:, :, 1]
+            # coords["lead_time"] = (
+            #     coords["lead_time"]
+            #     + self.output_coords(self.input_coords())["lead_time"]
+            # )
+
+
 class FuXiMedium(FuXiShort):
     """FuXi weather model that only uses the medium model."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.use_ort_path = self.ort_medium_path
         self.ort = create_ort_session(self.use_ort_path, self.device)
         self.model_range = "medium"
 
-        
+
 class FuXiLong(FuXiShort):
     """FuXi weather model that only uses the long model."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.use_ort_path = self.ort_long_path
