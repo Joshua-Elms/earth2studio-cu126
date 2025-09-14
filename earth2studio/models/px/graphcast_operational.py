@@ -395,36 +395,7 @@ class GraphCastOperational(torch.nn.Module, AutoModelMixin, PrognosticMixin):
             # rng, this_rng = split_rng_fn(rng)
             # addition: fix rng
             this_rng = jax.numpy.array([1, 2], dtype="uint32")
-            # read out initial "current_inputs", write them into this one for all forcing fields
-            from pathlib import Path
 
-            if not Path("static_current_inputs.nc").exists():
-                current_inputs.to_netcdf("static_current_inputs.nc")
-            static_current_inputs = xr.open_dataset("static_current_inputs.nc")
-            overwrite_vars = [
-                "year_progress_cos",
-                "year_progress_sin",
-                "day_progress_sin",
-                "day_progress_cos",
-                "toa_incident_solar_radiation",
-                "land_sea_mask",
-                "geopotential_at_surface",
-            ]
-            for var in overwrite_vars:
-                current_inputs[var] = static_current_inputs[var]
-
-            # TODO: add front hook here
-            # only incomplete because current_inputs is 
-            # a dataset and needs to be a tensor
-            # for front_hook to work, and the dims 
-            # of current_inputs are complicated 
-            # (e.g. lead_time on iter=0 changes to time after)
-            # breakpoint() # check current_inputs["2m_temperature"][0, :, 100, 100]
-            for name, dat in (("current_inputs", current_inputs), ("forcings", forcings)):
-                fpath = Path(f"stuff/{index}_{name}.nc")
-                if fpath.exists():
-                    fpath.unlink()
-                dat.to_netcdf(fpath)
             predictions = predictor_fn(
                 rng=this_rng,
                 inputs=current_inputs,
@@ -433,9 +404,7 @@ class GraphCastOperational(torch.nn.Module, AutoModelMixin, PrognosticMixin):
             )
 
             # Rear hook
-            print(predictions["2m_temperature"][0, :, 100, 100])
             xpred = self.iterator_result_to_tensor(predictions)
-            # breakpoint() # check predictions["2m_temperature"][0, :, 100, 100], xpred[0, :, 0, 100, 100]
             xpred, self._current_coords_for_iterator = self.rear_hook(
                 xpred, self._current_coords_for_iterator
             )
@@ -445,7 +414,7 @@ class GraphCastOperational(torch.nn.Module, AutoModelMixin, PrognosticMixin):
             next_frame = xr.merge([predictions, forcings])
 
             next_inputs = rollout._get_next_inputs(current_inputs, next_frame)
-            # breakpoint() # check current_inputs["2m_temperature"][0, :, 100, 100], next_inputs["2m_temperature"][0, :, 100, 100]
+
             # Shift timedelta coordinates, so we don't recompile at every iteration.
             next_inputs = next_inputs.assign_coords(time=current_inputs.coords["time"])
             current_inputs = next_inputs
@@ -710,9 +679,6 @@ class GraphCastOperational(torch.nn.Module, AutoModelMixin, PrognosticMixin):
                 "specific_humidity",
             ]
             for level in ATMOS_LEVELS
-        ] + [
-            "geopotential_at_surface",
-            "land_sea_mask"
         ]
         keep_coords = ["batch", "time", "level", "lat", "lon"]
         use_coords = coords.copy()
@@ -726,13 +692,10 @@ class GraphCastOperational(torch.nn.Module, AutoModelMixin, PrognosticMixin):
             if i in SL_VAR_INDICES:
                 ds[VARNAMES[i]] = (
                     ["batch", "time", "lat", "lon"],
-                    x[..., -1, i, :, :].cpu().numpy(),
+                    x[..., -1, i, :, :].cpu().numpy().astype(np.float32),
                 )
             elif i in ZERO_VAR_INDICES:
-                ds[VARNAMES[i]] = (
-                    ["batch", "time", "lat", "lon"],
-                    0 * x[..., -1, 0, :, :].cpu().numpy(),
-                )
+                continue  # skip these vars, they're not needed as output here
             else:  # rest of vars
                 # extract level, assuming it's all chars after 0th
                 lev = int(var[1:])
@@ -743,8 +706,10 @@ class GraphCastOperational(torch.nn.Module, AutoModelMixin, PrognosticMixin):
                         0,
                         coords={k: ds.coords[k] for k in keep_coords},
                         dims=keep_coords,
-                    )
-                ds[varname].loc[dict(level=[lev])] = x[..., -1, i, :, :].cpu().numpy()
+                    ).astype(np.float32)
+                ds[varname].loc[dict(level=[lev])] = (
+                    x[..., -1, i, :, :].cpu().numpy().astype(np.float32)
+                )
         return ds
 
     def from_dataarray_to_dataset(
