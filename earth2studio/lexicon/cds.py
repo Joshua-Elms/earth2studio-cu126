@@ -141,6 +141,8 @@ class CDSLexicon(metaclass=LexiconType):
         "w850": "reanalysis-era5-pressure-levels::vertical_velocity::850",
         "w925": "reanalysis-era5-pressure-levels::vertical_velocity::925",
         "w1000": "reanalysis-era5-pressure-levels::vertical_velocity::1000",
+        "z": "local::surface_geopotential::",
+        "lsm": "local::land_sea_mask::",
     }
 
     @classmethod

@@ -286,11 +286,16 @@ class CDS:
         if isinstance(level, str):
             level = [level]
 
-        sha = hashlib.sha256(
-            f"{dataset_name}_{variable}_{'_'.join(level)}_{time}".encode()
-        )
+        if dataset_name == "local":
+            sha = hashlib.sha256(
+            f"{dataset_name}_{variable}".encode()
+            )
+        else:
+            sha = hashlib.sha256(
+                f"{dataset_name}_{variable}_{'_'.join(level)}_{time}".encode()
+            )
         filename = sha.hexdigest()
-
+        
         cache_path = os.path.join(self.cache, filename)
 
         if not pathlib.Path(cache_path).is_file():
