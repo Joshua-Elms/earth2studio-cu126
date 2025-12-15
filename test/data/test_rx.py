@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import datetime
+import importlib.util
 import pathlib
 import shutil
 
@@ -108,10 +109,10 @@ def test_lsm_cache(time, cache):
         np.array([np.datetime64("1993-04-05T00:00")]),
     ],
 )
-def test_zsl_fetch(time):
+def test_fetch(time):
 
     ds = SurfaceGeoPotential(cache=False)
-    data = ds(time, "zsl")
+    data = ds(time, "z")
     shape = data.shape
 
     if isinstance(time, datetime.datetime):
@@ -121,10 +122,14 @@ def test_zsl_fetch(time):
     assert shape[1] == 1
     assert shape[2] == 721
     assert shape[3] == 1440
-    assert np.array_equal(data.coords["variable"].values, np.array(["zsl"]))
+    assert np.array_equal(data.coords["variable"].values, np.array(["z"]))
     assert not np.isnan(data.values).any()
 
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("physicsnemo") is None,
+    reason="physicsnemo not installed",
+)
 @pytest.mark.parametrize(
     "time",
     [
@@ -149,6 +154,10 @@ def test_zsl_fetch(time):
             "lon": np.linspace(0, 360, 1440, endpoint=False),
         },
     ],
+)
+@pytest.mark.skipif(
+    importlib.util.find_spec("physicsnemo") is None,
+    reason="physicsnemo not installed",
 )
 def test_uvcossza_fetch(time, domain_coords):
     ds = CosineSolarZenith(domain_coords)

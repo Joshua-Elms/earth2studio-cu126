@@ -28,11 +28,11 @@ from earth2studio.utils.time import timearray_to_datetime
 from earth2studio.utils.type import CoordSystem
 
 units_map = {
-    "h": "hour",
-    "D": "day",
-    "s": "second",
-    "m": "minute",
-    "Y": "year",
+    "h": "hours",
+    "D": "days",
+    "s": "seconds",
+    "m": "minutes",
+    "Y": "years",
 }
 rev_units_map = {v: k for k, v in units_map.items()}
 
@@ -147,6 +147,7 @@ class NetCDF4Backend:
                 var = self.root.createVariable(name, "i8", (name,))
                 var.units = out_units
                 var.calendar = "gregorian"
+                var.setncattr("dtype", "timedelta64[ns]")  # xarray target dtype
             else:
                 var = self.root.createVariable(name, data.dtype, (name,))
 

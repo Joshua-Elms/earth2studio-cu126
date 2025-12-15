@@ -29,7 +29,7 @@ from hashlib import sha256
 from inspect import signature
 from pathlib import Path
 from shutil import rmtree
-from typing import TYPE_CHECKING, ClassVar, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar
 
 import numpy as np
 import torch
@@ -288,6 +288,7 @@ def datasource_to_file(
     backend: Literal["netcdf", "zarr"] = "netcdf",
     chunks: dict[str, int] = {"variable": 1},
     dtype: np.dtype | None = None,
+    backend_kwargs: dict[str, Any] = {},
 ) -> None:
     """Utility function that can be used for building a local data store needed
     for an inference request. This file can then be used with the
@@ -313,6 +314,10 @@ def datasource_to_file(
         Chunk sizes along each dimension, by default {"variable": 1}
     dtype : np.dtype, optional
         Data type for storing data
+    backend_kwargs : dict[str, Any], optional
+        Dictionary of keyword arguments forwarded to the underlying
+        ``xarray.DataArray.to_netcdf`` / ``xarray.DataArray.to_zarr``
+        call depending on the selected backend.
     """
     if isinstance(time, datetime):
         time = [time]
@@ -339,9 +344,9 @@ def datasource_to_file(
 
     match backend:
         case "netcdf":
-            da.to_netcdf(file_name)
+            da.to_netcdf(file_name, **backend_kwargs)
         case "zarr":
-            da.to_zarr(file_name)
+            da.to_zarr(file_name, **backend_kwargs)
         case _:
             raise ValueError(f"Unsupported backend {backend}")
 
@@ -360,6 +365,32 @@ def datasource_cache_root() -> str:
         raise e
 
     return default_cache
+
+
+def get_msc_filesystem() -> filesystem | None:
+    """This helper function checks if Multi-Storage Client is available and sets up
+    the MSC configuration if needed.
+
+    Note
+    ----
+    Can force MSC to not be used with the environment variable EARTH2STUDIO_DISABLE_MSC
+
+    Returns
+    -------
+    filesystem | None
+        Returns multi-storage file system if installed, None otherwise
+    """
+    if str(os.getenv("EARTH2STUDIO_DISABLE_MSC", "")).strip().lower() in ("1", "true"):
+        return None
+
+    try:
+        from multistorageclient.contrib.async_fs import MultiStorageAsyncFileSystem
+
+        config_path = Path(__file__).parent / "msc_config.yaml"
+        os.environ["MSC_CONFIG"] = str(config_path)
+        return MultiStorageAsyncFileSystem
+    except ImportError:
+        return None
 
 
 T = TypeVar("T")

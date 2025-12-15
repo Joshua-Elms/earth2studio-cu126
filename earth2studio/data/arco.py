@@ -18,23 +18,22 @@ import asyncio
 import functools
 import os
 import pathlib
+import re
 import shutil
 from datetime import datetime
-from importlib.metadata import version
 
-import fsspec
-import gcsfs
 import nest_asyncio
 import numpy as np
 import xarray as xr
 import zarr
-from fsspec.implementations.cached import WholeFileCacheFileSystem
+from gcsfs import GCSFileSystem
 from loguru import logger
 from tqdm.asyncio import tqdm
 
 from earth2studio.data.utils import (
     AsyncCachingFileSystem,
     datasource_cache_root,
+    get_msc_filesystem,
     prep_data_inputs,
 )
 from earth2studio.lexicon import ARCOLexicon
@@ -43,9 +42,10 @@ from earth2studio.utils.type import TimeArray, VariableArray
 
 class ARCO:
     """Analysis-Ready, Cloud Optimized (ARCO) is a data store of ERA5 re-analysis data
-    currated by Google. This data is stored in Zarr format and contains 31 surface and
-    pressure level variables (for 37 pressure levels)  on a 0.25 degree lat lon grid.
-    Temporal resolution is 1 hour.
+    currated by Google. This data is stored in Zarr format and contains 31 surface
+    variables, pressure level variables defined on 37 pressure levels, and model level
+    variables defined on the 137 native ERA5 vertical levels, all on a 0.25 degree lat
+    lon grid. Temporal resolution is 1 hour.
 
     Parameters
     ----------
@@ -67,57 +67,38 @@ class ARCO:
     Additional information on the data repository can be referenced here:
 
     - https://cloud.google.com/storage/docs/public-datasets/era5
+
+    The data source will automatically use Multi-Storage Client (MSC) if available,
+    otherwise it will fallback to using gcsfs directly. MSC can provide better
+    performance for cloud storage access.
     """
 
     ARCO_LAT = np.linspace(90, -90, 721)
     ARCO_LON = np.linspace(0, 359.75, 1440)
 
     def __init__(
-        self, cache: bool = True, verbose: bool = True, async_timeout: int = 600
+        self,
+        cache: bool = True,
+        verbose: bool = True,
+        async_timeout: int = 600,
     ):
-        # Check Zarr version and use appropriate method
-        try:
-            zarr_version = version("zarr")
-            self.zarr_major_version = int(zarr_version.split(".")[0])
-        except Exception:
-            # Fallback to older method if version check fails
-            self.zarr_major_version = 2  # Assume older version if we can't determine
 
         self._cache = cache
         self._verbose = verbose
 
-        if self.zarr_major_version >= 3:
-            # Check to see if there is a running loop (initialized in async)
-            try:
-                nest_asyncio.apply()  # Monkey patch asyncio to work in notebooks
-                loop = asyncio.get_running_loop()
-                loop.run_until_complete(self._async_init())
-            except RuntimeError:
-                # Else we assume that async calls will be used which in that case
-                # we will init the group in the call function when we have the loop
-                self.zarr_group = None
-                self.level_coords = None
-        else:
-            fs = gcsfs.GCSFileSystem(
-                cache_timeout=-1,
-                token="anon",  # noqa: S106 # nosec B106
-                access="read_only",
-                block_size=8**20,
-                asynchronous=(self.zarr_major_version == 3),
-            )
-            if self._cache:
-                cache_options = {
-                    "cache_storage": self.cache,
-                    "expiry_time": 31622400,  # 1 year
-                }
-                fs = WholeFileCacheFileSystem(fs=fs, **cache_options)
-            # Legacy method for Zarr < 3.0
-            logger.warning("Using Zarr 2.0 method for ARCO")
-            fs_map = fsspec.FSMap(
-                "gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3", fs
-            )
-            self.zarr_group = zarr.open(fs_map, mode="r")
-            self.level_coords = self.zarr_group["level"][:]
+        # Check to see if there is a running loop (initialized in async)
+        try:
+            nest_asyncio.apply()  # Monkey patch asyncio to work in notebooks
+            loop = asyncio.get_running_loop()
+            loop.run_until_complete(self._async_init())
+        except RuntimeError:
+            # Else we assume that async calls will be used which in that case
+            # we will init the group in the call function when we have the loop
+            self.zarr_group: zarr.core.group.AsyncGroup | None = None
+            self.level_coords = None
+            # Model-level store
+            self.ml_zarr_group: zarr.core.group.AsyncGroup | None = None
+            self.ml_level_coords = None
 
         self.async_timeout = async_timeout
 
@@ -128,14 +109,24 @@ class ARCO:
         ----
         Async fsspec expects initialization inside of the execution loop
         """
-        fs = gcsfs.GCSFileSystem(
-            cache_timeout=-1,
-            token="anon",  # noqa: S106 # nosec B106
-            access="read_only",
-            block_size=8**20,
-            asynchronous=True,
-            skip_instance_cache=True,
-        )
+        # Common filesystem configuration parameters
+        fs_config = {
+            "cache_timeout": -1,
+            "token": "anon",  # noqa: S106 # nosec B106
+            "access": "read_only",
+            "block_size": 8**20,
+            "asynchronous": True,
+            "skip_instance_cache": True,
+        }
+
+        # Try to use Multi-Storage Client if available, otherwise fallback to gcsfs
+        MSCFileSystem = get_msc_filesystem()
+        if MSCFileSystem:
+            logger.debug("Using Multi-Storage Client for ARCO data access")
+            fs = MSCFileSystem(**fs_config)
+        else:
+            fs = GCSFileSystem(**fs_config)
+
         # Need to manually set this here, the reason being that when the file system
         # defines the weak ref of the client, it needs the loop used to create it.
         # Otherwise it will try to kill the client with another loop, throwing an error
@@ -149,12 +140,22 @@ class ARCO:
             }
             fs = AsyncCachingFileSystem(fs=fs, **cache_options, asynchronous=True)
 
+        # Pressure/surface store
         zstore = zarr.storage.FsspecStore(
             fs,
             path="/gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3",
         )
         self.zarr_group = await zarr.api.asynchronous.open(store=zstore, mode="r")
         self.level_coords = await (await self.zarr_group.get("level")).getitem(
+            slice(None)
+        )
+        # Model-level store
+        ml_zstore = zarr.storage.FsspecStore(
+            fs,
+            path="/gcp-public-data-arco-era5/ar/model-level-1h-0p25deg.zarr-v1",
+        )
+        self.ml_zarr_group = await zarr.api.asynchronous.open(store=ml_zstore, mode="r")
+        self.ml_level_coords = await (await self.ml_zarr_group.get("hybrid")).getitem(
             slice(None)
         )
 
@@ -281,7 +282,7 @@ class ARCO:
         np.ndarray
             Data
         """
-        if self.zarr_group is None:
+        if self.zarr_group is None or self.ml_zarr_group is None:
             raise ValueError("Zarr group is not initialized")
         # Get time index (vanilla zarr doesnt support date indices)
         time_index = self._get_time_index(time)
@@ -294,39 +295,31 @@ class ARCO:
             logger.error(f"variable id {variable} not found in ARCO lexicon")
             raise e
 
-        arco_variable, level = arco_name.split("::")
-        if self.zarr_major_version >= 3:
-            zarr_array = await self.zarr_group.get(arco_variable)
-            shape = zarr_array.shape
-            # Static variables
-            if len(shape) == 2:
-                data = await zarr_array.getitem(slice(None))
-                output = modifier(data)
-            # Surface variable
-            elif len(shape) == 3:
-                data = await zarr_array.getitem(time_index)
-                output = modifier(data)
-            # Atmospheric variable
-            else:
-                # Load levels coordinate system from Zarr store and check
-                level_index = np.searchsorted(self.level_coords, int(level))
-                data = await zarr_array.getitem((time_index, level_index))
-                output = modifier(data)
+        parts = arco_name.split("::")
+        arco_variable, level = parts[0], (parts[1] if len(parts) > 1 else "")
+        if self._is_mdl_level(variable):
+            zarr_group = self.ml_zarr_group
+            level_coords = self.ml_level_coords
         else:
-            # Zarr 2.0 fall back
-            shape = self.zarr_group[arco_variable].shape
-            # Static variables
-            if len(shape) == 2:
-                output = modifier(self.zarr_group[arco_variable][:])
-            # Surface variable
-            elif len(shape) == 3:
-                output = modifier(self.zarr_group[arco_variable][time_index])
-            # Atmospheric variable
-            else:
-                level_index = np.where(self.level_coords == int(level))[0][0]
-                output = modifier(
-                    self.zarr_group[arco_variable][time_index, level_index]
-                )
+            zarr_group = self.zarr_group
+            level_coords = self.level_coords
+
+        zarr_array = await zarr_group.get(arco_variable)
+        shape = zarr_array.shape
+        # Static variables
+        if len(shape) == 2:
+            data = await zarr_array.getitem(slice(None))
+            output = modifier(data)
+        # Surface variable
+        elif len(shape) == 3:
+            data = await zarr_array.getitem(time_index)
+            output = modifier(data)
+        # Atmospheric variable
+        else:
+            # Load levels coordinate system from Zarr store and check
+            level_index = np.searchsorted(level_coords, int(level))
+            data = await zarr_array.getitem((time_index, level_index))
+            output = modifier(data)
 
         return output
 
@@ -387,6 +380,22 @@ class ARCO:
         return int(divmod(duration.total_seconds(), 3600)[0])
 
     @classmethod
+    def _is_mdl_level(cls, variable: str) -> bool:
+        """Checks if given variable is a model level variable based on the lexicon pattern.
+
+        Parameters
+        ----------
+        variable : str
+            Variable to check
+
+        Returns
+        -------
+        bool
+            If variable is a model level variable
+        """
+        return bool(re.match(r"^[a-zA-Z0-9]+[0-9]+k$", variable))
+
+    @classmethod
     def available(cls, time: datetime | np.datetime64) -> bool:
         """Checks if given date time is avaliable in the ARCO data source
 
@@ -412,24 +421,17 @@ class ARCO:
             return False
 
         # TODO: FIX THIS, FOR ZARR 3.0 THIS IS DANGEROUS NON-ASYNC
-        gcs = gcsfs.GCSFileSystem(cache_timeout=-1)
-
-        try:
-            zarr_version = version("zarr")
-            zarr_major_version = int(zarr_version.split(".")[0])
-        except Exception:
-            zarr_major_version = 2
-
-        if zarr_major_version >= 3:
-            gcstore = zarr.storage.FsspecStore(
-                gcs,
-                path="/gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3",
-            )
+        # Try to use Multi-Storage Client if available, otherwise fallback to gcsfs
+        MSCFileSystem = get_msc_filesystem()
+        if MSCFileSystem:
+            fs = MSCFileSystem(cache_timeout=-1)
         else:
-            gcstore = gcsfs.GCSMap(
-                "gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3",
-                gcs=gcs,
-            )
+            fs = GCSFileSystem(cache_timeout=-1)
+
+        gcstore = zarr.storage.FsspecStore(
+            fs,
+            path="/gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3",
+        )
 
         zarr_group = zarr.open(gcstore, mode="r")
         # Load time coordinate system from Zarr store and check

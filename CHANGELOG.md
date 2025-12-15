@@ -1,4 +1,5 @@
 <!-- markdownlint-disable MD024 -->
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
@@ -6,7 +7,97 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.0a0] - 2025-07-xx
+## [0.11.0a0] - 2025-12-xx
+
+### Added
+
+- Added general PlanetaryComputerData source for pulling Planetary Computer STAC assets
+- Added ECMWF AIFSENS ensemble prognostic model wrapper
+- Added MRMS data source
+- Added IFS and IFS-ENS initial state datasources
+- Local datasource example
+
+### Changed
+
+- Removed tp06 field from Graphcast operational model
+- Removed static fields from Graphcast model input / outputs
+- Moved StormCast and DLESyM checkpoints to Huggingface
+- Change previous IFS, IFS_ENS, AIFS and AIFS_ENS sources to IFS_FX, IFS_ENS_FX, AIFS_FX
+  and AIFS_ENS_FX to reflect that they are forecast sources
+- Support multiple x, coords pairs in batch function decorator
+
+### Deprecated
+
+### Removed
+
+- Removed support for returning multiple samples at once from IFS ENS data sources
+- IMERG datasource
+
+### Fixed
+
+### Security
+
+### Dependencies
+
+- Removed Aurora-fork option which had a temporary patch for package conflict that is
+  resolved in the source aurora package
+
+## [0.10.0] - 2025-11-24
+
+### Added
+
+- Added CMIP6 data source
+- Added CBottle Tropical Cyclone guidance diagnostic
+- Added CBottle Video prognostic model
+- Exposed backend arguments of netcdf/zarr to datasource_to_file signature
+- Added vertical wind speed support in GFS
+- Added ModelOutputDatasetSource to use written model output to start a new model run
+- Added FCN3 noise handling routines
+- Added ACE2-ERA5 model and data source
+- Added tp06 support to CDS data source
+- Added IFS_ENS, AIFS, and AIFS_ENS data sources.
+- Added Multi-Storage Client integration into ARCO data source
+- Ensemble forecasting with downscaling example
+
+### Changed
+
+- Updated CBottle data source to mixture of experts models, added additional parameters
+  to load_model to align with other cBottle models.
+- Fixed duplicate geo-potential at surface ids in AIFS, IFS data source and orography
+  source, orography is denoted by lower case `z`
+- Updated package caching default to None, which will default to true for remote
+  packages and false for local packages
+- Changed IFS to be a forecast data source.
+- InferenceOutputSource can now accept an Xarray Dataset directly as an argument
+- InferenceOutputSource returns data consistently in `("time", "lead_time", "variable")`
+  order
+- Added support for ERA5 model levels and additional variables in ARCO data source
+- Changed the HRRR_X and HRRR_Y coordinates of the HRRR data source to match the native
+  LCC coordinates
+- Updated CorrDiffTaiwan model wrapper to use latest PhysicsNeMo APIs.
+
+### Deprecated
+
+- Added depricated warning for IMERG data source. This will be removed in the next
+  release.
+
+### Fixed
+
+- Fixed typo: InferenceOuputSource renamed to InferenceOutputSource
+- StormCast ensures that conditioning variables are in the correct order
+- NetCDFBackend unit change to ensure timedeltas are correctly decoded by xarray
+- GFS data source for early 2021 dates
+- Updated corrdiff wrapper for newer physicsnemo performance improvements
+
+### Dependencies
+
+- Dropped support for Python 3.10
+- Bumped CBottle (and Earth2Grid) versions
+- Capped JAX version, due to numpy 2.0 requirement conflicting with NV PyTorch containers
+- Temp limit globus-sdk for intake-esgf
+- Added multi-storage client into data dependency group
+
+## [0.9.0] - 2025-08-19
 
 ### Added
 
@@ -15,10 +106,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - IO performance example
 - Unified CorrDiff Wrapper
 - Added UV script dependencies to all examples
-- Added CMIP6 data source
-- New metrics: Brier score, fractions skill score, log spectral distance, mean absolute error.
-- Option to compute error of ensemble mean in rmse and mae.
-- Added FourCastNet 3 model.
+- New metrics: Brier score, fractions skill score, log spectral distance, mean absolute
+  error
+- Option to compute error of ensemble mean in rmse and mae
+- Added FourCastNet 3 model
 
 ### Changed
 
@@ -29,10 +120,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated APIs for optional dependency managment utils with improved error messages
 - Allow Zarr backends to user datetime and timedelta arrays for Zarr 3.0
 
-### Deprecated
-
-### Removed
-
 ### Fixed
 
 - Incorrect datetime utc timezone calculation in SFNO wrapper was fixed.
@@ -41,8 +128,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clean up
 - Fixed HRRR_FX valid lead time check for date times not on 6 hour interval
 - Removed time limits for WB2 climatology data source
-
-### Security
 
 ### Dependencies
 

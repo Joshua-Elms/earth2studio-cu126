@@ -30,8 +30,13 @@ Used for fetching initial conditions for inference and validation data for scori
    data.GOES
    data.HRRR
    data.IFS
-   data.IMERG
+   data.IFS_ENS
+   data.JPSS
+   data.MRMS
    data.NCAR_ERA5
+   data.PlanetaryComputerOISST
+   data.PlanetaryComputerSentinel3AOD
+   data.PlanetaryComputerMODISFire
    data.Random
    data.WB2ERA5
    data.WB2ERA5_121x240
@@ -54,16 +59,20 @@ Typically used in intercomparison workflows.
    :toctree: generated/data/
    :template: datasource.rst
 
+   data.AIFS_FX
+   data.AIFS_ENS_FX
    data.GFS_FX
    data.GEFS_FX
    data.GEFS_FX_721x1440
    data.HRRR_FX
+   data.IFS_FX
+   data.IFS_ENS_FX
 
 AI Sources
 ~~~~~~~~~~
 
 Data sources that leverage an AI model to generate weather / climate data at that can be
-used for downstream tasks.
+used for downstream tasks real time.
 Unlike prognostic or diagnostic models, these sources do not require any input state
 for subsequent predictions.
 

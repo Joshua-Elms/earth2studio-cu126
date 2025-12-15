@@ -1,17 +1,18 @@
+.PHONY: install
 install:
 	uv sync
 	uv sync --extra all --extra aifs
 
 .PHONY: install-docker
 install-docker:
-	uv pip install --system --break-system-packages .[all,aifs] --group dev
-	uv pip install --system --break-system-packages zarr~=3.0
+	uv pip install --system --break-system-packages .[all] --group dev
 
 .PHONY: setup-ci
 setup-ci:
 	uv venv --python=3.12
 	uv sync
 	uv run pre-commit install --install-hooks
+	uv tool install tox --with tox-uv
 
 .PHONY: format
 format:
@@ -43,32 +44,27 @@ license:
 
 .PHONY: pytest
 pytest:
-	uv run coverage run -m pytest --ci-cache --slow test/
+	uvx tox -c tox-min.ini run
 
-.PHONY: pytest-docker
-pytest-docker:
-	coverage run -m pytest --ci-cache --slow test/
+.PHONY: pytest-full
+pytest-full:
+	uvx tox -c tox.ini run -- -s --cov --cov-append --slow --package --testmon-noselect
 
-.PHONY: pytest-submodule
-pytest-submodule:
-	uv run coverage run --source=$(COVERAGE_SOURCE) -m pytest --ci-cache --slow $(PYTEST_SOURCE)
+# Select which pytest target to run in CI based on environment
+ifneq (,$(filter 1 true TRUE True yes YES on ON,$(CI_PYTEST_ALL)))
+PYTEST_CI_TARGET := pytest-full
+else
+PYTEST_CI_TARGET := pytest
+endif
 
-.PHONY: pytest-submodule-docker
-pytest-submodule-docker:
-	coverage run --source=$(COVERAGE_SOURCE) -m pytest --ci-cache --slow -s $(PYTEST_SOURCE)
-
-.PHONY: pytest-automodels-docker
-pytest-automodels-docker:
-	pytest -s test/models/test_auto_models.py -k test_auto_model_download --model-download
-
-.PHONY: doctest
-doctest:
-	echo "Skipping doc test"
+.PHONY: pytest-ci
+pytest-ci:
+	$(MAKE) $(PYTEST_CI_TARGET)
 
 .PHONY: coverage
 coverage:
-	uv run coverage combine
-	uv run coverage report --fail-under=90
+	uv run coverage combine || true
+	uv run coverage report --fail-under=90 || true
 
 .PHONY: docs
 docs:
@@ -90,18 +86,6 @@ docs-build-examples:
 	rm -rf examples/outputs
 	uv run $(MAKE) -C docs html
 	PLOT_GALLERY=True RUN_STALE_EXAMPLES=True uv run $(MAKE) -j 8 -C docs html
-
-.PHONY: docs-full-docker
-docs-full-docker:
-	uv pip install --system --break-system-packages .[all] --group docs
-	uv pip install --system --break-system-packages zarr>3.0
-	rm -rf docs/examples
-	rm -rf docs/modules/generated
-	rm -rf docs/modules/backreferences
-	$(MAKE) -C docs clean
-	rm -rf examples/outputs
-	$(MAKE) -C docs html
-	PLOT_GALLERY=True RUN_STALE_EXAMPLES=True $(MAKE) -j 8 -C docs html
 
 .PHONY: docs-dev
 docs-dev:

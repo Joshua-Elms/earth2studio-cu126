@@ -32,7 +32,9 @@ from earth2studio.models.px.utils import PrognosticMixin
 from earth2studio.utils import (
     handshake_coords,
     handshake_dim,
+    handshake_size,
 )
+from earth2studio.utils.coords import map_coords
 from earth2studio.utils.imports import (
     OptionalDependencyFailure,
     check_optional_dependencies,
@@ -76,10 +78,6 @@ CONDITIONING_VARIABLES = ["u10m", "v10m", "t2m", "tcwv", "sp", "msl"] + [
 
 INVARIANTS = ["lsm", "orography"]
 
-# Extent of domain in StormCastV1 paper (HRRR Lambert projection indices)
-X_START, X_END = 579, 1219
-Y_START, Y_END = 273, 785
-
 
 @check_optional_dependencies()
 class StormCast(torch.nn.Module, AutoModelMixin, PrognosticMixin):
@@ -99,6 +97,7 @@ class StormCast(torch.nn.Module, AutoModelMixin, PrognosticMixin):
     For more information see the following references:
 
     - https://arxiv.org/abs/2408.10958
+    - https://huggingface.co/nvidia/stormcast-v1-era5-hrrr
 
     Parameters
     ----------
@@ -164,8 +163,8 @@ class StormCast(torch.nn.Module, AutoModelMixin, PrognosticMixin):
             hrrr_lat_lim[0] : hrrr_lat_lim[1], hrrr_lon_lim[0] : hrrr_lon_lim[1]
         ]
 
-        self.hrrr_x = np.arange(hrrr_lon_lim[0], hrrr_lon_lim[1], 1)
-        self.hrrr_y = np.arange(hrrr_lat_lim[0], hrrr_lat_lim[1], 1)
+        self.hrrr_x = HRRR.HRRR_X[hrrr_lon_lim[0] : hrrr_lon_lim[1]]
+        self.hrrr_y = HRRR.HRRR_Y[hrrr_lat_lim[0] : hrrr_lat_lim[1]]
 
         self.variables = variables
 
@@ -229,8 +228,9 @@ class StormCast(torch.nn.Module, AutoModelMixin, PrognosticMixin):
         handshake_dim(input_coords, "hrrr_x", 5)
         handshake_dim(input_coords, "hrrr_y", 4)
         handshake_dim(input_coords, "variable", 3)
-        handshake_coords(input_coords, target_input_coords, "hrrr_x")
-        handshake_coords(input_coords, target_input_coords, "hrrr_y")
+        # Index coords are arbitrary as long its on the HRRR grid, so just check size
+        handshake_size(input_coords, "hrrr_y", self.lat.shape[0])
+        handshake_size(input_coords, "hrrr_x", self.lat.shape[1])
         handshake_coords(input_coords, target_input_coords, "variable")
 
         output_coords["batch"] = input_coords["batch"]
@@ -244,7 +244,7 @@ class StormCast(torch.nn.Module, AutoModelMixin, PrognosticMixin):
     def load_default_package(cls) -> Package:
         """Load prognostic package"""
         package = Package(
-            "ngc://models/nvidia/earth-2/stormcast-v1-era5-hrrr@1.0.2",
+            "hf://nvidia/stormcast-v1-era5-hrrr@ed5d4eda664e65555aafe1ccbcf19130d1f84bf8",
             cache_options={
                 "cache_storage": Package.default_cache("stormcast"),
                 "same_names": True,
@@ -407,6 +407,16 @@ class StormCast(torch.nn.Module, AutoModelMixin, PrognosticMixin):
             device=x.device,
             interp_to=coords | {"_lat": self.lat, "_lon": self.lon},
             interp_method="linear",
+        )
+        # ensure data dimensions in the expected order
+        conditioning_coords_ordered = OrderedDict(
+            {
+                k: conditioning_coords[k]
+                for k in ["time", "lead_time", "variable", "lat", "lon"]
+            }
+        )
+        conditioning, conditioning_coords = map_coords(
+            conditioning, conditioning_coords, conditioning_coords_ordered
         )
 
         # Add a batch dim

@@ -14,15 +14,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .ace import ACELexicon
 from .arco import ARCOLexicon
 from .cbottle import CBottleLexicon
 from .cds import CDSLexicon
 from .cmip6 import CMIP6Lexicon
+from .ecmwf import AIFSLexicon, IFSLexicon
 from .gefs import GEFSLexicon, GEFSLexiconSel
 from .gfs import GFSLexicon
 from .goes import GOESLexicon
 from .hrrr import HRRRFXLexicon, HRRRLexicon
-from .ifs import IFSLexicon
-from .imerg import IMERGLexicon
+from .jpss import JPSSLexicon
+from .mrms import MRMSLexicon
 from .ncar import NCAR_ERA5Lexicon
+from .planetary_computer import (
+    MODISFireLexicon,
+    OISSTLexicon,
+    Sentinel3AODLexicon,
+)
 from .wb2 import WB2ClimatetologyLexicon, WB2Lexicon
